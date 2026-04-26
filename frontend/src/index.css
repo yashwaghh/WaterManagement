@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .card {
+    @apply bg-white rounded-lg shadow-md p-6 border border-gray-200;
+  }
+
+  .card-header {
+    @apply border-b border-gray-200 pb-4 mb-4;
+  }
+
+  .btn-primary {
+    @apply bg-primary-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-primary-700 transition duration-200;
+  }
+
+  .btn-secondary {
+    @apply bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-medium hover:bg-gray-300 transition duration-200;
+  }
+
+  .badge-efficient {
+    @apply bg-accent-green/20 text-accent-green px-3 py-1 rounded-full text-sm font-medium;
+  }
+
+  .badge-normal {
+    @apply bg-accent-yellow/20 text-accent-yellow px-3 py-1 rounded-full text-sm font-medium;
+  }
+
+  .badge-high {
+    @apply bg-accent-red/20 text-accent-red px-3 py-1 rounded-full text-sm font-medium;
+  }
+
+  .tab-button {
+    @apply px-4 py-2 font-medium text-gray-700 hover:text-primary-600 border-b-2 border-transparent hover:border-primary-600 transition duration-200;
+  }
+
+  .tab-button.active {
+    @apply text-primary-600 border-b-2 border-primary-600;
+  }
+
+  .stat-box {
+    @apply bg-gradient-to-br from-primary-50 to-blue-50 rounded-lg p-4 border border-primary-100;
+  }
+}
+
+body {
+  @apply bg-gray-50 font-sans;
+}
+
+html {
+  scroll-behavior: smooth;
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "2026-04-26T18:08:13.118234",
+    "flat_id": "A-105",
+    "day": 1,
+    "total_usage_ml": 21.6,
+    "min_water_left_ml": 1606.7,
+    "average_flow_ml_min": 3454.42,
+    "peak_flow_ml_min": 4188.2,
+    "peak_usage_timestamp": "2026-04-26T18:08:13.104056",
+    "suggested_reduction": "Excellent usage! Keep maintaining this level.",
+    "report_timestamp": "2026-04-26T18:08:13.118234"
+  }
+]

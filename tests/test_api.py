@@ -6,7 +6,7 @@ Uses Flask's built-in test client (no extra dependencies beyond pytest).
 import os
 import datetime as dt
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Set required env vars before importing the app so load_dotenv() doesn't
 # overwrite them with missing values.

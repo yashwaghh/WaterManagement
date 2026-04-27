@@ -87,7 +87,10 @@ def _get(key: str, default: Any = None) -> Any:
     ).fetchone()
     if row is None:
         return default
-    return json.loads(row["value"])
+    try:
+        return json.loads(row["value"])
+    except (json.JSONDecodeError, TypeError):
+        return default
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ Hybrid Mode: Real data for specified flats, simulation for others
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from datetime import datetime, timedelta
+from functools import wraps
 import os
 import json
 from dotenv import load_dotenv
@@ -14,12 +15,35 @@ from src.analytics import Analytics
 from src.ranking import Ranking
 from src.multi_flat_ranking import MultiFlatRanking
 from src.report_storage import ReportStorage
+from src.storage import load_state, save_day, save_weekly_points, reset_week_state
 from simulator import MultiFlatSimulator
 
 load_dotenv()
 
 app = Flask(__name__, static_folder='frontend/build', static_url_path='/')
 CORS(app)
+
+# ---------------------------------------------------------------------------
+# Admin authentication
+# ---------------------------------------------------------------------------
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
+
+
+def require_admin(f):
+    """Decorator that enforces Bearer-token authentication on admin endpoints."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not ADMIN_SECRET:
+            # No secret configured — deny all access rather than allow open access
+            return jsonify({"error": "Admin secret not configured on server"}), 503
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Unauthorized"}), 401
+        token = auth_header[len("Bearer "):]
+        if token != ADMIN_SECRET:
+            return jsonify({"error": "Forbidden"}), 403
+        return f(*args, **kwargs)
+    return decorated
 
 # Initialize services
 simulator = None
@@ -32,13 +56,14 @@ report_storage = ReportStorage()
 REAL_DATA_FLATS = ["A-101"]  # These use Firebase real data
 SIMULATED_FLATS = ["A-102", "A-103", "A-104", "A-105"]  # These use simulation
 
-# Session state (mimics Streamlit)
+# Session state — load persisted values from SQLite, fall back to defaults
+_persisted = load_state()
 session_state = {
     "current_cycle_readings_by_flat": {},
     "cycle_start_time": datetime.now(),
-    "simulated_day_number": 1,
-    "weekly_points": {},
-    "completed_daily_leaderboards": [],
+    "simulated_day_number": _persisted["simulated_day_number"],
+    "weekly_points": _persisted["weekly_points"],
+    "completed_daily_leaderboards": _persisted["completed_daily_leaderboards"],
 }
 
 
@@ -266,11 +291,14 @@ def get_weekly_summary():
 
 
 @app.route("/api/admin/reset-day", methods=["POST"])
+@require_admin
 def reset_day():
     """Reset to next day (admin control)."""
     session_state["cycle_start_time"] = datetime.now()
     session_state["simulated_day_number"] += 1
     session_state["current_cycle_readings_by_flat"] = {}
+
+    save_day(session_state["simulated_day_number"])
 
     return jsonify(
         {
@@ -282,12 +310,15 @@ def reset_day():
 
 
 @app.route("/api/admin/reset-week", methods=["POST"])
+@require_admin
 def reset_week():
     """Reset weekly points (admin control)."""
     session_state["weekly_points"] = {}
     session_state["simulated_day_number"] = 1
     session_state["current_cycle_readings_by_flat"] = {}
     session_state["cycle_start_time"] = datetime.now()
+
+    reset_week_state()
 
     return jsonify(
         {
@@ -299,6 +330,7 @@ def reset_week():
 
 
 @app.route("/api/admin/toggle-simulation", methods=["POST"])
+@require_admin
 def toggle_simulation():
     """Toggle simulation mode."""
     data_mode = os.getenv("DATA_MODE", "simulation")
@@ -321,6 +353,7 @@ def get_flats():
 
 
 @app.route("/api/admin/state", methods=["GET"])
+@require_admin
 def get_admin_state():
     """Get current app state (admin debug)."""
     return jsonify(

@@ -56,6 +56,13 @@ report_storage = ReportStorage()
 REAL_DATA_FLATS = ["A-101"]  # These use Firebase real data
 SIMULATED_FLATS = ["A-102", "A-103", "A-104", "A-105"]  # These use simulation
 
+# Leak detection — consecutive non-zero flow ticks before an alert is raised.
+# At 5 s poll interval, 120 ticks ≈ 10 minutes of continuous flow.
+LEAK_TICKS_THRESHOLD = int(os.getenv("LEAK_TICKS_THRESHOLD", 120))
+
+# How many history points to keep in memory per simulated flat.
+_HISTORY_MAX = 50
+
 # Session state — load persisted values from SQLite, fall back to defaults
 _persisted = load_state()
 session_state = {
@@ -64,6 +71,10 @@ session_state = {
     "simulated_day_number": _persisted["simulated_day_number"],
     "weekly_points": _persisted["weekly_points"],
     "completed_daily_leaderboards": _persisted["completed_daily_leaderboards"],
+    # Leak detection: flat_id -> consecutive non-zero flow tick count
+    "consecutive_flow_ticks": {},
+    # In-memory history ring-buffer for simulated flats
+    "flat_history": {},
 }
 
 
@@ -163,6 +174,27 @@ def get_leaderboard():
     # Store readings for analytics
     session_state["current_cycle_readings_by_flat"] = readings_by_flat
 
+    # --- Leak detection: update consecutive non-zero flow tick counters ---
+    flow_ticks = session_state["consecutive_flow_ticks"]
+    flat_history = session_state["flat_history"]
+    for flat_id, reading in readings_by_flat.items():
+        flow = reading.get("flow_rate_ml_min", 0)
+        flow_ticks[flat_id] = flow_ticks.get(flat_id, 0) + 1 if flow > 0 else 0
+
+        # Accumulate in-memory history (used by /api/history for simulated flats)
+        usage = reading.get("water_used_ml", 0)
+        threshold = reading.get("daily_threshold_ml", 2500)
+        efficiency = round(100 - (usage / threshold * 100), 2) if threshold > 0 else 0
+        hist = flat_history.setdefault(flat_id, [])
+        hist.append({
+            "timestamp": reading.get("timestamp"),
+            "usage": round(usage, 1),
+            "flow_rate": round(flow, 1),
+            "efficiency": efficiency,
+        })
+        if len(hist) > _HISTORY_MAX:
+            hist.pop(0)
+
     if not readings_by_flat:
         return jsonify({"leaderboard": [], "generated_at": datetime.now().isoformat()})
 
@@ -213,6 +245,73 @@ def get_leaderboard():
             "mode": "hybrid",
         }
     )
+
+
+@app.route("/api/alerts", methods=["GET"])
+def get_alerts():
+    """Return flats with suspected pipe leak.
+
+    A flat is flagged when its flow_rate_ml_min has been non-zero for more
+    than LEAK_TICKS_THRESHOLD consecutive leaderboard ticks (default 120
+    ticks × 5 s poll ≈ 10 minutes).  Pass ?ticks=N to override per-request.
+    """
+    threshold = int(request.args.get("ticks", LEAK_TICKS_THRESHOLD))
+    alerts = []
+    for flat_id, ticks in session_state["consecutive_flow_ticks"].items():
+        if ticks > threshold:
+            alerts.append({
+                "flat_id": flat_id,
+                "consecutive_ticks": ticks,
+                "duration_seconds": ticks * 5,
+                "alert_type": "probable_leak",
+            })
+    return jsonify({
+        "alerts": alerts,
+        "threshold_ticks": threshold,
+        "generated_at": datetime.now().isoformat(),
+    })
+
+
+@app.route("/api/history/<flat_id>", methods=["GET"])
+def get_history(flat_id):
+    """Return recent historical readings for a flat.
+
+    Real flats: reads from Firebase ``readings/{flat_id}/history`` (written by
+    the ESP8266 / simulator via ``push()``).
+    Simulated flats: returns the in-memory ring-buffer accumulated by
+    ``/api/leaderboard`` ticks.
+    """
+    limit = max(1, min(int(request.args.get("limit", 50)), 200))
+
+    def _to_history_point(r):
+        usage = r.get("water_used_ml", 0)
+        threshold = r.get("daily_threshold_ml", 2500)
+        efficiency = round(100 - (usage / threshold * 100), 2) if threshold > 0 else 0
+        return {
+            "timestamp": r.get("timestamp"),
+            "usage": round(usage, 1),
+            "flow_rate": round(r.get("flow_rate_ml_min", 0), 1),
+            "efficiency": efficiency,
+        }
+
+    if flat_id in REAL_DATA_FLATS:
+        if firebase_client is None:
+            initialize_firebase()
+        history = []
+        if firebase_client:
+            raw = firebase_client.get_history(flat_id, limit=limit)
+            history = [_to_history_point(r) for r in raw]
+        return jsonify({"flat_id": flat_id, "history": history, "data_source": "REAL"})
+
+    if flat_id in SIMULATED_FLATS:
+        history = session_state["flat_history"].get(flat_id, [])
+        return jsonify({
+            "flat_id": flat_id,
+            "history": history[-limit:],
+            "data_source": "SIM",
+        })
+
+    return jsonify({"error": "Flat not found"}), 404
 
 
 @app.route("/api/analytics/<flat_id>", methods=["GET"])

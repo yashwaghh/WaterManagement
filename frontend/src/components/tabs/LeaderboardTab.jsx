@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Trophy, TrendingUp, Zap, Droplets } from 'lucide-react';
+import { Trophy, TrendingUp, Zap, Droplets, AlertTriangle } from 'lucide-react';
 import apiService from '../../services/api';
 import useStore from '../../store/useStore';
 
@@ -8,6 +8,7 @@ export default function LeaderboardTab() {
     useStore();
   const [weeklySummary, setWeeklySummary] = useState([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [alertedFlats, setAlertedFlats] = useState(new Set());
 
   // Fetch leaderboard
   const fetchLeaderboard = async () => {
@@ -34,15 +35,28 @@ export default function LeaderboardTab() {
     }
   };
 
+  // Fetch leak alerts
+  const fetchAlerts = async () => {
+    try {
+      const response = await apiService.getAlerts();
+      const ids = new Set(response.data.alerts.map((a) => a.flat_id));
+      setAlertedFlats(ids);
+    } catch (err) {
+      console.error('Failed to fetch alerts:', err);
+    }
+  };
+
   // Initial fetch and setup auto-refresh
   useEffect(() => {
     fetchLeaderboard();
     fetchWeeklySummary();
+    fetchAlerts();
 
     if (autoRefresh) {
       const interval = setInterval(() => {
         fetchLeaderboard();
         fetchWeeklySummary();
+        fetchAlerts();
       }, 5000); // Refresh every 5 seconds
 
       return () => clearInterval(interval);
@@ -61,6 +75,17 @@ export default function LeaderboardTab() {
 
   return (
     <div className="space-y-6">
+      {/* Leak alert banner */}
+      {alertedFlats.size > 0 && (
+        <div className="flex items-center gap-3 rounded-lg bg-red-50 border border-red-300 px-4 py-3 text-red-800">
+          <AlertTriangle size={20} className="shrink-0 text-red-600" />
+          <span className="font-semibold">Probable leak detected</span>
+          <span className="text-sm">
+            {[...alertedFlats].join(', ')} — continuous flow for 10+ minutes with no break.
+          </span>
+        </div>
+      )}
+
       {/* Header with controls */}
       <div className="flex justify-between items-center">
         <div>
@@ -139,7 +164,20 @@ export default function LeaderboardTab() {
                       )}
                     </div>
                   </td>
-                  <td className="py-4 px-4 font-medium text-gray-900">{entry.flat_id}</td>
+                  <td className="py-4 px-4 font-medium text-gray-900">
+                    <span className="flex items-center gap-2">
+                      {entry.flat_id}
+                      {alertedFlats.has(entry.flat_id) && (
+                        <span
+                          title="Probable pipe leak"
+                          className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700"
+                        >
+                          <AlertTriangle size={11} />
+                          Leak
+                        </span>
+                      )}
+                    </span>
+                  </td>
                   <td className="py-4 px-4 text-center">
                     <div className="flex items-center justify-center gap-2">
                       <TrendingUp

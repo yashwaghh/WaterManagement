@@ -76,6 +76,10 @@ export const apiService = {
 
   // Analytics
   getAnalytics: (flatId) => apiClient.get(`/analytics/${flatId}`),
+  getHistory: (flatId, limit = 50) => apiClient.get(`/history/${flatId}?limit=${limit}`),
+
+  // Alerts
+  getAlerts: () => apiClient.get('/alerts'),
 
   // Admin Controls (require Authorization header)
   resetDay: () => adminClient.post('/admin/reset-day'),

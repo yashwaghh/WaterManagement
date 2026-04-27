@@ -8,6 +8,7 @@ export default function AnalyticsTab() {
   const { leaderboard, selectedFlat, setSelectedFlat, analytics, setAnalytics, setLoading, loading, setError } =
     useStore();
   const [flats, setFlats] = useState([]);
+  const [history, setHistory] = useState([]);
 
   // Fetch flats list
   useEffect(() => {
@@ -26,27 +27,31 @@ export default function AnalyticsTab() {
     fetchFlats();
   }, []);
 
-  // Fetch analytics for selected flat
+  // Fetch analytics + history for selected flat
   useEffect(() => {
-    if (selectedFlat) {
-      const fetchAnalytics = async () => {
-        setLoading(true);
-        try {
-          const response = await apiService.getAnalytics(selectedFlat);
-          setAnalytics(response.data);
-          setError(null);
-        } catch (err) {
-          setError('Failed to fetch analytics');
-          console.error(err);
-        } finally {
-          setLoading(false);
-        }
-      };
+    if (!selectedFlat) return;
 
-      fetchAnalytics();
-      const interval = setInterval(fetchAnalytics, 5000);
-      return () => clearInterval(interval);
-    }
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const [analyticsRes, historyRes] = await Promise.all([
+          apiService.getAnalytics(selectedFlat),
+          apiService.getHistory(selectedFlat, 50),
+        ]);
+        setAnalytics(analyticsRes.data);
+        setHistory(historyRes.data.history || []);
+        setError(null);
+      } catch (err) {
+        setError('Failed to fetch analytics');
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
+    return () => clearInterval(interval);
   }, [selectedFlat, setAnalytics, setLoading, setError]);
 
   if (!selectedFlat) {

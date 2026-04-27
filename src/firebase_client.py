@@ -69,6 +69,32 @@ class FirebaseClient:
             print(f"Firebase fetch error for {flat_id}: {e}")
             return None
 
+    def get_history(self, flat_id: str, limit: int = 50) -> list:
+        """
+        Fetch the most-recent *limit* historical readings for a flat.
+
+        The ESP8266 / simulator writes to ``readings/{flat_id}/history`` via
+        Firebase ``push()``, so keys are time-ordered.  We retrieve the last
+        *limit* entries ordered by key and return them as a plain list.
+
+        Args:
+            flat_id: e.g., "A-101"
+            limit: Maximum number of readings to return (default 50).
+
+        Returns:
+            List of reading dicts, oldest first, or [] on error / no data.
+        """
+        try:
+            ref = db.reference(f"readings/{flat_id}/history")
+            data = ref.order_by_key().limit_to_last(limit).get()
+            if not data:
+                return []
+            # data is an OrderedDict[push_id -> reading_dict] — return values only
+            return list(data.values())
+        except Exception as e:
+            print(f"Firebase history fetch error for {flat_id}: {e}")
+            return []
+
     # Optional (unchanged)
     def get_all_readings(self) -> Optional[list]:
         try:

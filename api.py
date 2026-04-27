@@ -189,39 +189,6 @@ def get_leaderboard():
         }
     )
 
-    # Rank flats
-    ranked = ranking_service.rank_flats(
-        daily_reports=daily_reports,
-        threshold_ml=threshold_ml,
-        simulated_day=session_state["simulated_day_number"],
-        weekly_points=session_state["weekly_points"],
-        finalize_points=False,
-    )
-
-    leaderboard = []
-    for record in ranked:
-        leaderboard.append(
-            {
-                "rank": record.rank,
-                "flat_id": record.unique_id,
-                "efficiency_score": record.efficiency_score,
-                "status": record.status,
-                "usage": record.total_usage_ml,
-                "target": record.threshold_ml,
-                "peak_flow": record.peak_flow_rate_ml_min,
-                "daily_points": record.daily_points,
-                "weekly_points": session_state["weekly_points"].get(record.unique_id, 0),
-            }
-        )
-
-    return jsonify(
-        {
-            "leaderboard": leaderboard,
-            "day": session_state["simulated_day_number"],
-            "generated_at": datetime.now().isoformat(),
-        }
-    )
-
 
 @app.route("/api/analytics/<flat_id>", methods=["GET"])
 def get_analytics(flat_id):
@@ -349,13 +316,8 @@ def toggle_simulation():
 @app.route("/api/flats", methods=["GET"])
 def get_flats():
     """Get list of all flats in the system."""
-    initialize_simulator()
-
-    flats = set()
-    for flat_id in session_state["current_cycle_readings_by_flat"].keys():
-        flats.add(flat_id)
-
-    return jsonify({"flats": sorted(list(flats))})
+    all_flats = sorted(REAL_DATA_FLATS + SIMULATED_FLATS)
+    return jsonify({"flats": all_flats})
 
 
 @app.route("/api/admin/state", methods=["GET"])

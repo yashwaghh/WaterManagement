@@ -15,7 +15,7 @@ from src.analytics import Analytics
 from src.ranking import Ranking
 from src.multi_flat_ranking import MultiFlatRanking
 from src.report_storage import ReportStorage
-from src.storage import load_state, save_day, save_weekly_points, reset_week_state
+from src.storage import load_state, save_day, reset_week_state
 from simulator import MultiFlatSimulator
 
 load_dotenv()

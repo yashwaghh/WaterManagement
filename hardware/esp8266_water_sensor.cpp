@@ -2,19 +2,13 @@
 #include <WiFiClientSecure.h>
 #include <ESP8266HTTPClient.h>
 #include <time.h>
+#include "credentials.h"  // Copy credentials.h.example → credentials.h and fill in your values
 
 // 🔹 Flow sensor
 volatile int pulseCount = 0;
 
 // 🔹 Water tracking
 float totalUsage_ml = 0;
-
-// 🔹 WiFi
-const char* ssid = "realme P1 5G";
-const char* password = "@Adlatur08";
-
-// 🔹 Firebase
-const char* firebaseHost = "https://watermonitor-e23c8-default-rtdb.asia-southeast1.firebasedatabase.app";
 
 // 🔹 Interrupt
 void IRAM_ATTR countPulse() {

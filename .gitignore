@@ -9,6 +9,7 @@ service_account.json
 *.pem
 .aws/
 secrets/
+hardware/credentials.h
 
 # Python
 __pycache__/

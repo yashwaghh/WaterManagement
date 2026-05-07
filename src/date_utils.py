@@ -24,7 +24,7 @@ class DateUtils:
         try:
             dt = datetime.fromisoformat(timestamp_str)
             return dt.strftime("%Y-%m-%d")
-        except:
+        except Exception:
             return timestamp_str[:10]
 
     @staticmethod
@@ -41,7 +41,7 @@ class DateUtils:
         try:
             dt = datetime.fromisoformat(timestamp_str)
             return dt.isocalendar()[1]
-        except:
+        except Exception:
             return 1
 
     @staticmethod
@@ -61,7 +61,7 @@ class DateUtils:
             start = dt - timedelta(days=dt.weekday())
             end = start + timedelta(days=6)
             return (start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
-        except:
+        except Exception:
             return ("N/A", "N/A")
 
     @staticmethod
@@ -162,7 +162,7 @@ class DateUtils:
                 report_date = datetime.fromisoformat(report_date_str)
                 if report_date >= start_date:
                     filtered.append(report)
-            except:
+            except Exception:
                 pass
 
         return filtered

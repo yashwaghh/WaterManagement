@@ -3,6 +3,8 @@ On-Demand Report Generator
 Generate reports for custom date/day ranges on demand.
 """
 
+import json
+import os
 from datetime import datetime
 from typing import List, Dict, Any
 from src.report_storage import ReportStorage
@@ -102,14 +104,27 @@ class ReportGenerator:
         }
 
     @staticmethod
-    def get_available_days() -> List[int]:
+    def get_available_days(flat_id: str = None) -> List[int]:
         """
         Get list of available day numbers.
+
+        Args:
+            flat_id: Optional flat ID to filter by specific flat
 
         Returns:
             Sorted list of day numbers
         """
-        all_reports = ReportStorage.load_all_reports()
+        if flat_id:
+            all_reports = ReportStorage.load_all_reports(flat_id)
+        else:
+            # Load all reports unfiltered
+            all_reports = []
+            if os.path.exists(ReportStorage.REPORTS_FILE):
+                try:
+                    with open(ReportStorage.REPORTS_FILE, "r") as f:
+                        all_reports = json.load(f)
+                except Exception:
+                    all_reports = []
         days = set()
 
         for report in all_reports:

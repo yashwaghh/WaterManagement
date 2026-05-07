@@ -31,8 +31,14 @@ class ReportStorage:
         """
         ReportStorage._ensure_data_dir()
 
-        # Load existing reports
-        reports = ReportStorage.load_all_reports(flat_id)
+        # Load ALL existing reports (unfiltered) so we don't drop other flats' data
+        reports = []
+        if os.path.exists(ReportStorage.REPORTS_FILE):
+            try:
+                with open(ReportStorage.REPORTS_FILE, "r") as f:
+                    reports = json.load(f)
+            except Exception:
+                reports = []
 
         # Convert report to dict
         report_dict = {
@@ -54,13 +60,12 @@ class ReportStorage:
         # Save to file with atomic write (write to temp, then rename)
         try:
             import tempfile
+            import shutil
             temp_fd, temp_path = tempfile.mkstemp(dir="data", suffix=".json")
             with open(temp_fd, 'w') as f:
                 json.dump(reports, f, indent=2)
 
             # Atomic rename
-            import os
-            import shutil
             shutil.move(temp_path, ReportStorage.REPORTS_FILE)
             print(f"✅ Report saved: {report.report_timestamp}")
         except Exception as e:
@@ -68,7 +73,7 @@ class ReportStorage:
             # Clean up temp file if it exists
             try:
                 os.remove(temp_path)
-            except:
+            except Exception:
                 pass
 
     @staticmethod
@@ -161,7 +166,7 @@ class ReportStorage:
             try:
                 with open(ReportStorage.REPORTS_FILE, "r") as f:
                     all_reports = json.load(f)
-            except:
+            except Exception:
                 pass
 
         # Remove reports for this flat

@@ -106,22 +106,24 @@ def fetch_and_process_readings():
             return
 
         try:
-            latest_reading = st.session_state.firebase_client.get_latest_reading()
-            if latest_reading is None:
-                return
+            # Fetch readings for each known flat from Firebase
+            known_flats = ["A-101", "A-102", "A-103", "A-104", "A-105"]
+            for flat_id in known_flats:
+                latest_reading = st.session_state.firebase_client.get_latest_reading(flat_id)
+                if latest_reading is None:
+                    continue
 
-            is_valid, _ = Analytics.validate_reading(latest_reading)
-            if not is_valid:
-                return
+                is_valid, _ = Analytics.validate_reading(latest_reading)
+                if not is_valid:
+                    continue
 
-            if "timestamp" not in latest_reading:
-                latest_reading["timestamp"] = datetime.now().isoformat()
+                if "timestamp" not in latest_reading:
+                    latest_reading["timestamp"] = datetime.now().isoformat()
 
-            flat_id = latest_reading.get("unique_id", "flat_001")
-            if flat_id not in st.session_state.current_cycle_readings_by_flat:
-                st.session_state.current_cycle_readings_by_flat[flat_id] = []
+                if flat_id not in st.session_state.current_cycle_readings_by_flat:
+                    st.session_state.current_cycle_readings_by_flat[flat_id] = []
 
-            st.session_state.current_cycle_readings_by_flat[flat_id].append(latest_reading)
+                st.session_state.current_cycle_readings_by_flat[flat_id].append(latest_reading)
 
         except Exception as e:
             st.session_state.firebase_error = str(e)

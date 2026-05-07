@@ -23,6 +23,7 @@ export default function AdminTab() {
     fetchAdminState();
     const interval = setInterval(fetchAdminState, 5000);
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Reset day action

@@ -63,6 +63,18 @@ def init_db() -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS redemptions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            flat_id    TEXT NOT NULL,
+            item_id    TEXT NOT NULL,
+            item_title TEXT NOT NULL,
+            points_cost INTEGER NOT NULL,
+            redeemed_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
 
 
@@ -123,7 +135,53 @@ def save_completed_leaderboards(leaderboards: List[Any]) -> None:
 
 
 def reset_week_state() -> None:
-    """Reset weekly state (points + completed leaderboards) back to defaults."""
+    """Reset weekly state (points + completed leaderboards + redemptions) back to defaults."""
     save_day(1)
     save_weekly_points({})
     save_completed_leaderboards([])
+    clear_all_redemptions()
+
+
+# ---------------------------------------------------------------------------
+# Redemption tracking
+# ---------------------------------------------------------------------------
+
+def save_redemption(flat_id: str, item_id: str, item_title: str, points_cost: int) -> int:
+    """Record a store redemption. Returns the new redemption ID."""
+    from datetime import datetime
+    conn = _get_connection()
+    cursor = conn.execute(
+        "INSERT INTO redemptions (flat_id, item_id, item_title, points_cost, redeemed_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (flat_id, item_id, item_title, points_cost, datetime.now().isoformat()),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_total_redeemed(flat_id: str) -> int:
+    """Get the total points redeemed by a flat."""
+    conn = _get_connection()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(points_cost), 0) as total FROM redemptions WHERE flat_id = ?",
+        (flat_id,),
+    ).fetchone()
+    return row["total"] if row else 0
+
+
+def get_redemptions(flat_id: str) -> List[Dict]:
+    """Get all redemptions for a flat."""
+    conn = _get_connection()
+    rows = conn.execute(
+        "SELECT id, item_id, item_title, points_cost, redeemed_at "
+        "FROM redemptions WHERE flat_id = ? ORDER BY redeemed_at DESC",
+        (flat_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_all_redemptions() -> None:
+    """Clear all redemptions (used on weekly reset)."""
+    conn = _get_connection()
+    conn.execute("DELETE FROM redemptions")
+    conn.commit()

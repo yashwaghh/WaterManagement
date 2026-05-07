@@ -21,10 +21,12 @@ const adminClient = axios.create({
   },
 });
 
+const isDev = process.env.NODE_ENV !== 'production';
+
 // Request interceptor
 apiClient.interceptors.request.use(
   (config) => {
-    console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`);
+    if (isDev) console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`);
     return config;
   },
   (error) => Promise.reject(error)
@@ -33,11 +35,11 @@ apiClient.interceptors.request.use(
 // Response interceptor
 apiClient.interceptors.response.use(
   (response) => {
-    console.log(`API Response: ${response.status}`, response.data);
+    if (isDev) console.log(`API Response: ${response.status}`, response.data);
     return response;
   },
   (error) => {
-    console.error('API Error:', error.message);
+    if (isDev) console.error('API Error:', error.message);
     return Promise.reject(error);
   }
 );
@@ -45,7 +47,7 @@ apiClient.interceptors.response.use(
 // Apply the same logging interceptors to adminClient
 adminClient.interceptors.request.use(
   (config) => {
-    console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`);
+    if (isDev) console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`);
     return config;
   },
   (error) => Promise.reject(error)
@@ -53,11 +55,11 @@ adminClient.interceptors.request.use(
 
 adminClient.interceptors.response.use(
   (response) => {
-    console.log(`API Response: ${response.status}`, response.data);
+    if (isDev) console.log(`API Response: ${response.status}`, response.data);
     return response;
   },
   (error) => {
-    console.error('API Error:', error.message);
+    if (isDev) console.error('API Error:', error.message);
     return Promise.reject(error);
   }
 );
@@ -77,6 +79,17 @@ export const apiService = {
   // Analytics
   getAnalytics: (flatId) => apiClient.get(`/analytics/${flatId}`),
   getHistory: (flatId, limit = 50) => apiClient.get(`/history/${flatId}?limit=${limit}`),
+  getReports: (flatId) => apiClient.get(`/reports/${flatId}`),
+  getReportForDay: (flatId, day) => apiClient.get(`/reports/${flatId}/day/${day}`),
+  getWeeklyReport: (flatId, startDay = 1, endDay = 7) =>
+    apiClient.get(`/reports/${flatId}/weekly?start_day=${startDay}&end_day=${endDay}`),
+
+  // PDF Download URLs (direct browser download — not axios)
+  getDailyPdfUrl: (flatId, day) => `${API_BASE_URL}/reports/${flatId}/pdf/daily/${day}`,
+  getWeeklyPdfUrl: (flatId, startDay = 1, endDay = 7) =>
+    `${API_BASE_URL}/reports/${flatId}/pdf/weekly?start_day=${startDay}&end_day=${endDay}`,
+  getMonthlyPdfUrl: (flatId, startDay = 1, endDay = 30) =>
+    `${API_BASE_URL}/reports/${flatId}/pdf/monthly?start_day=${startDay}&end_day=${endDay}`,
 
   // Alerts
   getAlerts: () => apiClient.get('/alerts'),
@@ -86,6 +99,11 @@ export const apiService = {
   resetWeek: () => adminClient.post('/admin/reset-week'),
   toggleSimulation: () => adminClient.post('/admin/toggle-simulation'),
   getAdminState: () => adminClient.get('/admin/state'),
+
+  // Points & Store
+  getPoints: (flatId) => apiClient.get(`/points/${flatId}`),
+  redeemPoints: (flatId, itemId, itemTitle, pointsCost) =>
+    apiClient.post('/redeem', { flat_id: flatId, item_id: itemId, item_title: itemTitle, points_cost: pointsCost }),
 };
 
 export default apiService;

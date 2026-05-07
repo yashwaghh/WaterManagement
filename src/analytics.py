@@ -27,17 +27,43 @@ class DailyReport:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "day": self.day,
             "total_usage_ml": self.total_usage_ml,
             "min_water_left_ml": self.min_water_left_ml,
             "average_flow_ml_min": self.average_flow_ml_min,
             "peak_flow_ml_min": self.peak_flow_ml_min,
-            "peak_usage_timestamp": self.peak_usage_timestamp,
+            "peak_usage_timestamp": self.peak_usage_timestamp
+                if isinstance(self.peak_usage_timestamp, str)
+                else self.peak_usage_timestamp.isoformat(),
             "suggested_reduction": self.suggested_reduction,
-            "report_timestamp": self.report_timestamp,
+            "report_timestamp": self.report_timestamp
+                if isinstance(self.report_timestamp, str)
+                else self.report_timestamp.isoformat(),
         }
 
 
 class Analytics:
+
+    @staticmethod
+    def validate_reading(reading: Dict[str, Any]) -> tuple:
+        """
+        Validate that a sensor reading dict has the required fields.
+
+        Args:
+            reading: Raw sensor reading dictionary.
+
+        Returns:
+            Tuple (is_valid: bool, message: str)
+        """
+        required_fields = ["water_used_ml", "flow_rate_ml_min"]
+        for field in required_fields:
+            if field not in reading:
+                return False, f"Missing required field: {field}"
+            try:
+                float(reading[field])
+            except (TypeError, ValueError):
+                return False, f"Invalid value for {field}: {reading[field]}"
+        return True, "OK"
 
     @staticmethod
     def compile_report(readings: List[Dict[str, Any]]) -> DailyReport:
@@ -99,7 +125,7 @@ class Analytics:
             try:
                 peak_idx = df["flow_rate_ml_min"].idxmax()
                 peak_timestamp = pd.to_datetime(df.loc[peak_idx, "timestamp"]).to_pydatetime()
-            except:
+            except Exception:
                 peak_timestamp = datetime.now()
         else:
             peak_timestamp = datetime.now()
@@ -118,6 +144,47 @@ class Analytics:
             suggested_reduction=suggested_reduction,
             report_timestamp=datetime.now(),
         )
+
+    @staticmethod
+    def compile_reports_by_flat(
+        readings_by_flat: Dict[str, List[Dict[str, Any]]],
+        simulated_day: int = None,
+    ) -> Dict[str, DailyReport]:
+        """
+        Compile a DailyReport for each flat from accumulated readings.
+
+        Args:
+            readings_by_flat: Dict keyed by flat_id → list of reading dicts.
+            simulated_day: Optional day number to attach to each report.
+
+        Returns:
+            Dict keyed by flat_id → DailyReport.
+        """
+        reports = {}
+        for flat_id, readings in readings_by_flat.items():
+            report = Analytics.compile_report(readings)
+            if simulated_day is not None:
+                report.day = simulated_day
+            reports[flat_id] = report
+        return reports
+
+    @staticmethod
+    def convert_to_dataframe(readings: List[Dict[str, Any]]) -> pd.DataFrame:
+        """
+        Convert a list of reading dicts to a pandas DataFrame with parsed timestamps.
+
+        Args:
+            readings: List of sensor reading dictionaries.
+
+        Returns:
+            pandas DataFrame (empty DataFrame if readings is empty).
+        """
+        if not readings:
+            return pd.DataFrame()
+        df = pd.DataFrame(readings)
+        if "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        return df
 
     @staticmethod
     def _suggest_reduction(total_usage_ml: float, average_flow: float) -> str:

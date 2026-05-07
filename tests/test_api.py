@@ -153,7 +153,7 @@ class TestLeaderboard:
 
 class TestAnalytics:
     _SIM_FLAT = api.SIMULATED_FLATS[0] if api.SIMULATED_FLATS else "A-102"
-    _REAL_FLAT = api.REAL_DATA_FLATS[0] if api.REAL_DATA_FLATS else "A-101"
+    _REAL_FLAT = "A-101"
     _FAKE_READING = {
         "unique_id": _SIM_FLAT,
         "water_used_ml": 1800,
@@ -184,6 +184,7 @@ class TestAnalytics:
         assert data["data_source"] == "SIM"
 
     def test_analytics_real_flat_with_firebase(self, client):
+        """Force A-101 into REAL_DATA_FLATS to test the Firebase code path."""
         fake_reading = {
             "unique_id": self._REAL_FLAT,
             "water_used_ml": 1000,
@@ -191,20 +192,37 @@ class TestAnalytics:
             "flow_rate_ml_min": 80,
             "timestamp": "2024-01-01T00:00:00",
         }
-        with patch("api.get_real_data_from_firebase", return_value=fake_reading):
-            resp = client.get(f"/api/analytics/{self._REAL_FLAT}")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["data_source"] == "REAL"
+        orig_real = api.REAL_DATA_FLATS[:]
+        orig_sim = api.SIMULATED_FLATS[:]
+        try:
+            api.REAL_DATA_FLATS = [self._REAL_FLAT]
+            api.SIMULATED_FLATS = [f for f in orig_sim if f != self._REAL_FLAT]
+            with patch("api.get_real_data_from_firebase", return_value=fake_reading):
+                resp = client.get(f"/api/analytics/{self._REAL_FLAT}")
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["data_source"] == "REAL"
+        finally:
+            api.REAL_DATA_FLATS = orig_real
+            api.SIMULATED_FLATS = orig_sim
 
     def test_analytics_unknown_flat_404(self, client):
         resp = client.get("/api/analytics/Z-999")
         assert resp.status_code == 404
 
     def test_analytics_real_flat_no_data_404(self, client):
-        with patch("api.get_real_data_from_firebase", return_value=None):
-            resp = client.get(f"/api/analytics/{self._REAL_FLAT}")
-        assert resp.status_code == 404
+        """Force A-101 into REAL_DATA_FLATS so the Firebase path returns 404."""
+        orig_real = api.REAL_DATA_FLATS[:]
+        orig_sim = api.SIMULATED_FLATS[:]
+        try:
+            api.REAL_DATA_FLATS = [self._REAL_FLAT]
+            api.SIMULATED_FLATS = [f for f in orig_sim if f != self._REAL_FLAT]
+            with patch("api.get_real_data_from_firebase", return_value=None):
+                resp = client.get(f"/api/analytics/{self._REAL_FLAT}")
+            assert resp.status_code == 404
+        finally:
+            api.REAL_DATA_FLATS = orig_real
+            api.SIMULATED_FLATS = orig_sim
 
 
 # ---------------------------------------------------------------------------

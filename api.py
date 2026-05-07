@@ -5,8 +5,9 @@ Hybrid Mode: Real data for specified flats, simulation for others
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import wraps
+import logging
 import os
 import json
 from dotenv import load_dotenv
@@ -15,13 +16,20 @@ from src.analytics import Analytics
 from src.ranking import Ranking
 from src.multi_flat_ranking import MultiFlatRanking
 from src.report_storage import ReportStorage
-from src.storage import load_state, save_day, reset_week_state
+from src.storage import (
+    load_state, save_day, reset_week_state, save_weekly_points,
+    save_redemption, get_total_redeemed, get_redemptions,
+)
 from simulator import MultiFlatSimulator
 
 load_dotenv()
 
 app = Flask(__name__, static_folder='frontend/build', static_url_path='/')
 CORS(app)
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 # ---------------------------------------------------------------------------
 # Admin authentication
@@ -53,8 +61,22 @@ analytics_service = Analytics()
 report_storage = ReportStorage()
 
 # HYBRID MODE CONFIG
-REAL_DATA_FLATS = ["A-101"]  # These use Firebase real data
-SIMULATED_FLATS = ["A-102", "A-103", "A-104", "A-105"]  # These use simulation
+data_mode = os.getenv("DATA_MODE", "simulation").lower()
+
+if data_mode == "simulation":
+    REAL_DATA_FLATS = []
+    SIMULATED_FLATS = ["A-101", "A-102", "A-103", "A-104", "A-105"]
+elif data_mode == "firebase":
+    REAL_DATA_FLATS = ["A-101", "A-102", "A-103", "A-104", "A-105"]
+    SIMULATED_FLATS = []
+else:  # hybrid
+    REAL_DATA_FLATS = ["A-101"]
+    SIMULATED_FLATS = ["A-102", "A-103", "A-104", "A-105"]
+
+# Per-person daily water allowance in ml.
+# Final threshold for a flat = PER_PERSON_ML × family_size.
+PER_PERSON_ML = int(os.getenv("PER_PERSON_ML", 500))
+DEFAULT_FAMILY_SIZE = int(os.getenv("DEFAULT_FAMILY_SIZE", 4))
 
 # Leak detection — consecutive non-zero flow ticks before an alert is raised.
 # At 5 s poll interval, 120 ticks ≈ 10 minutes of continuous flow.
@@ -91,9 +113,48 @@ def initialize_firebase():
     if firebase_client is None:
         try:
             firebase_client = FirebaseClient()
+            logger.info("Firebase initialized successfully")
         except Exception as e:
-            print(f"Firebase initialization failed: {e}")
+            logger.warning("Firebase initialization failed: %s", e)
             firebase_client = None
+
+
+def get_family_size(flat_id: str) -> int:
+    """Look up family size for a flat from Firebase user profiles.
+
+    Falls back to DEFAULT_FAMILY_SIZE if not found.
+    Results are cached in session_state['flat_family_sizes'].
+    """
+    cache = session_state.setdefault("flat_family_sizes", {})
+    if flat_id in cache:
+        return cache[flat_id]
+
+    # Try reading from Firebase RTDB users collection
+    try:
+        if firebase_client is None:
+            initialize_firebase()
+        if firebase_client:
+            from firebase_admin import db as fb_db
+            users_ref = fb_db.reference("users")
+            users_data = users_ref.get()
+            if users_data and isinstance(users_data, dict):
+                for uid, profile in users_data.items():
+                    if isinstance(profile, dict) and profile.get("flat_id") == flat_id:
+                        fs = int(profile.get("family_size", DEFAULT_FAMILY_SIZE))
+                        cache[flat_id] = fs
+                        logger.info("Family size for %s: %d (from Firebase)", flat_id, fs)
+                        return fs
+    except Exception as e:
+        logger.warning("Error looking up family size for %s: %s", flat_id, e)
+
+    cache[flat_id] = DEFAULT_FAMILY_SIZE
+    return DEFAULT_FAMILY_SIZE
+
+
+def get_threshold_for_flat(flat_id: str) -> int:
+    """Calculate per-flat daily water threshold based on family size."""
+    family_size = get_family_size(flat_id)
+    return PER_PERSON_ML * family_size
 
 
 def get_real_data_from_firebase(flat_id):
@@ -114,7 +175,7 @@ def get_real_data_from_firebase(flat_id):
                     "timestamp": reading.get("timestamp", datetime.now().isoformat()),
                 }
     except Exception as e:
-        print(f"Error fetching Firebase data for {flat_id}: {e}")
+        logger.warning("Error fetching Firebase data for %s: %s", flat_id, e)
 
     return None
 
@@ -134,7 +195,8 @@ def get_config():
             "real_data_flats": REAL_DATA_FLATS,
             "simulated_flats": SIMULATED_FLATS,
             "simulated_day_length": int(os.getenv("SIMULATED_DAY_LENGTH_SECONDS", 60)),
-            "usage_threshold": int(os.getenv("USAGE_THRESHOLD_ML", 2500)),
+            "per_person_ml": PER_PERSON_ML,
+            "default_family_size": DEFAULT_FAMILY_SIZE,
         }
     )
 
@@ -159,9 +221,9 @@ def get_leaderboard():
         real_reading = get_real_data_from_firebase(flat_id)
         if real_reading:
             readings_by_flat[flat_id] = real_reading
-            print(f"[REAL] {flat_id}: {real_reading.get('water_used_ml')}ml")
+            logger.info("[REAL] %s: %sml", flat_id, real_reading.get('water_used_ml'))
         else:
-            print(f"[WARNING] No real data for {flat_id}, check Firebase")
+            logger.warning("[WARNING] No real data for %s, check Firebase", flat_id)
 
     # Get simulated data for SIMULATED_FLATS
     if simulator:
@@ -169,7 +231,7 @@ def get_leaderboard():
         for flat_id in SIMULATED_FLATS:
             if flat_id in all_simulated:
                 readings_by_flat[flat_id] = all_simulated[flat_id]
-                print(f"[SIM] {flat_id}: {all_simulated[flat_id].get('water_used_ml')}ml")
+                logger.info("[SIM] %s: %sml", flat_id, all_simulated[flat_id].get('water_used_ml'))
 
     # Store readings for analytics
     session_state["current_cycle_readings_by_flat"] = readings_by_flat
@@ -207,13 +269,13 @@ def get_leaderboard():
             peak_flow_ml_min=reading["flow_rate_ml_min"],
         )
 
-    # Get threshold from config
-    threshold_ml = int(os.getenv("USAGE_THRESHOLD_ML", 2500))
-
-    # Rank flats
-    ranked = ranking_service.rank_flats(
+    # Rank flats with per-flat thresholds
+    # We pass the max threshold for global ranking, but include per-flat targets in response
+    flat_thresholds = {fid: get_threshold_for_flat(fid) for fid in readings_by_flat}
+    # Use per-flat thresholds in ranking by setting each report's threshold
+    ranked = ranking_service.rank_flats_per_threshold(
         daily_reports=daily_reports,
-        threshold_ml=threshold_ml,
+        flat_thresholds=flat_thresholds,
         simulated_day=session_state["simulated_day_number"],
         weekly_points=session_state["weekly_points"],
         finalize_points=False,
@@ -342,7 +404,7 @@ def get_analytics(flat_id):
     # Extract data from reading (dict format)
     total_usage = reading.get("water_used_ml", 0)
     peak_flow = reading.get("flow_rate_ml_min", 0)
-    daily_threshold = reading.get("daily_threshold_ml", 2500)
+    daily_threshold = get_threshold_for_flat(flat_id)
     timestamp = reading.get("timestamp", datetime.now().isoformat())
 
     # Calculate efficiency
@@ -392,7 +454,51 @@ def get_weekly_summary():
 @app.route("/api/admin/reset-day", methods=["POST"])
 @require_admin
 def reset_day():
-    """Reset to next day (admin control)."""
+    """Reset to next day and finalize points (admin control)."""
+    # 1. Finalize points for all active readings
+    
+    # Failsafe: Ensure all flats are processed even if not in current cycle
+    all_flats = REAL_DATA_FLATS + SIMULATED_FLATS
+    current_readings = session_state.get("current_cycle_readings_by_flat", {})
+    
+    # If a flat is completely missing, provide a dummy 0 reading so a report is still generated
+    for f_id in all_flats:
+        if f_id not in current_readings:
+            current_readings[f_id] = {
+                "water_used_ml": 0,
+                "flow_rate_ml_min": 0,
+                "daily_threshold_ml": int(os.getenv("USAGE_THRESHOLD_ML", 2500)),
+                "timestamp": datetime.now().isoformat()
+            }
+
+    if current_readings:
+        daily_reports = {}
+        for flat_id, reading in current_readings.items():
+            daily_reports[flat_id] = SimpleReport(
+                total_usage_ml=reading.get("water_used_ml", 0),
+                average_flow_ml_min=reading.get("flow_rate_ml_min", 0),
+                peak_flow_ml_min=reading.get("flow_rate_ml_min", 0),
+            )
+            
+            # Save actual full report
+            report = Analytics.compile_report([reading])
+            report.day = session_state["simulated_day_number"]
+            report_storage.save_report(report, flat_id)
+
+        flat_thresholds = {fid: get_threshold_for_flat(fid) for fid in daily_reports}
+        ranked = ranking_service.rank_flats_per_threshold(
+            daily_reports=daily_reports,
+            flat_thresholds=flat_thresholds,
+            simulated_day=session_state["simulated_day_number"],
+            weekly_points=session_state["weekly_points"],
+            finalize_points=True,
+        )
+
+        session_state["weekly_points"] = MultiFlatRanking.update_weekly_points(
+            session_state["weekly_points"], ranked
+        )
+        save_weekly_points(session_state["weekly_points"])
+
     session_state["cycle_start_time"] = datetime.now()
     session_state["simulated_day_number"] += 1
     session_state["current_cycle_readings_by_flat"] = {}
@@ -431,16 +537,351 @@ def reset_week():
 @app.route("/api/admin/toggle-simulation", methods=["POST"])
 @require_admin
 def toggle_simulation():
-    """Toggle simulation mode."""
-    data_mode = os.getenv("DATA_MODE", "simulation")
-    new_mode = "firebase" if data_mode == "simulation" else "simulation"
+    """Toggle simulation mode.
+
+    Note: This only returns the toggled mode name. To actually apply it,
+    update DATA_MODE in your .env and restart the application.
+    """
+    global data_mode
+    current_mode = data_mode
+    new_mode = "firebase" if current_mode == "simulation" else "simulation"
 
     return jsonify(
         {
             "status": "success",
             "current_mode": new_mode,
-            "message": f"Switched to {new_mode} mode (restart app to apply)",
+            "previous_mode": current_mode,
+            "message": f"Mode would switch from '{current_mode}' to '{new_mode}'. "
+                       f"Update DATA_MODE in .env and restart the app to apply.",
         }
+    )
+
+
+@app.route("/api/points/<flat_id>", methods=["GET"])
+def get_points(flat_id):
+    """Get current spendable points balance for a flat.
+
+    balance = weekly_points + projected_daily_points - total_redeemed
+
+    Projected daily points come from the current leaderboard cycle
+    (before admin finalizes with Reset Day). This lets users see
+    and spend their earned points in real-time.
+    """
+    weekly = session_state["weekly_points"].get(flat_id, 0)
+
+    # Calculate projected daily points from current cycle readings
+    projected_daily = 0
+    current_readings = session_state.get("current_cycle_readings_by_flat", {})
+    if current_readings:
+        daily_reports = {}
+        for fid, reading in current_readings.items():
+            daily_reports[fid] = SimpleReport(
+                total_usage_ml=reading.get("water_used_ml", 0),
+                average_flow_ml_min=reading.get("flow_rate_ml_min", 0),
+                peak_flow_ml_min=reading.get("flow_rate_ml_min", 0),
+            )
+        flat_thresholds = {fid: get_threshold_for_flat(fid) for fid in daily_reports}
+        ranked = ranking_service.rank_flats_per_threshold(
+            daily_reports=daily_reports,
+            flat_thresholds=flat_thresholds,
+            simulated_day=session_state["simulated_day_number"],
+            weekly_points=session_state["weekly_points"],
+            finalize_points=False,
+        )
+        for record in ranked:
+            if record.unique_id == flat_id:
+                projected_daily = record.daily_points
+                break
+
+    total_earned = weekly + projected_daily
+    redeemed = get_total_redeemed(flat_id)
+    balance = max(0, total_earned - redeemed)
+    return jsonify({
+        "flat_id": flat_id,
+        "weekly_points": weekly,
+        "projected_daily_points": projected_daily,
+        "total_earned": total_earned,
+        "total_redeemed": redeemed,
+        "balance": balance,
+        "redemptions": get_redemptions(flat_id),
+    })
+
+
+@app.route("/api/redeem", methods=["POST"])
+def redeem_points():
+    """Redeem points for a store item.
+
+    Body JSON: { "flat_id": "A-101", "item_id": "maint-5", "item_title": "5% Maintenance Concession", "points_cost": 4000 }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
+
+    flat_id = data.get("flat_id")
+    item_id = data.get("item_id")
+    item_title = data.get("item_title", "Unknown Item")
+    points_cost = int(data.get("points_cost", 0))
+
+    if not flat_id or not item_id or points_cost <= 0:
+        return jsonify({"error": "flat_id, item_id, and points_cost are required"}), 400
+
+    # Check balance (including projected daily points from current cycle)
+    weekly = session_state["weekly_points"].get(flat_id, 0)
+
+    # Include projected daily points
+    projected_daily = 0
+    current_readings = session_state.get("current_cycle_readings_by_flat", {})
+    if current_readings:
+        daily_reports = {}
+        for fid, reading in current_readings.items():
+            daily_reports[fid] = SimpleReport(
+                total_usage_ml=reading.get("water_used_ml", 0),
+                average_flow_ml_min=reading.get("flow_rate_ml_min", 0),
+                peak_flow_ml_min=reading.get("flow_rate_ml_min", 0),
+            )
+        flat_thresholds = {fid: get_threshold_for_flat(fid) for fid in daily_reports}
+        ranked = ranking_service.rank_flats_per_threshold(
+            daily_reports=daily_reports,
+            flat_thresholds=flat_thresholds,
+            simulated_day=session_state["simulated_day_number"],
+            weekly_points=session_state["weekly_points"],
+            finalize_points=False,
+        )
+        for record in ranked:
+            if record.unique_id == flat_id:
+                projected_daily = record.daily_points
+                break
+
+    total_earned = weekly + projected_daily
+    redeemed = get_total_redeemed(flat_id)
+    balance = max(0, total_earned - redeemed)
+
+    if points_cost > balance:
+        return jsonify({
+            "error": "Insufficient points",
+            "balance": balance,
+            "cost": points_cost,
+        }), 400
+
+    # Record redemption
+    redemption_id = save_redemption(flat_id, item_id, item_title, points_cost)
+    new_balance = balance - points_cost
+
+    logger.info("Redemption: %s redeemed '%s' for %d pts (balance: %d -> %d)",
+                flat_id, item_title, points_cost, balance, new_balance)
+
+    return jsonify({
+        "status": "success",
+        "redemption_id": redemption_id,
+        "item_title": item_title,
+        "points_deducted": points_cost,
+        "new_balance": new_balance,
+    })
+
+
+@app.route("/api/reports/<flat_id>", methods=["GET"])
+def get_reports(flat_id):
+    """Get all completed daily reports for a flat."""
+    reports = report_storage.load_all_reports(flat_id)
+    return jsonify({"flat_id": flat_id, "reports": reports})
+
+
+@app.route("/api/reports/<flat_id>/day/<int:day>", methods=["GET"])
+def get_report_for_day(flat_id, day):
+    """Get a single daily report on demand."""
+    from src.on_demand_report import ReportGenerator
+
+    report = ReportGenerator.generate_daily_report_on_demand(day, flat_id)
+    if report is None:
+        return jsonify({"error": f"No report found for {flat_id} day {day}"}), 404
+    return jsonify({"flat_id": flat_id, "day": day, "report": report})
+
+
+@app.route("/api/reports/<flat_id>/weekly", methods=["GET"])
+def get_weekly_report(flat_id):
+    """Generate a weekly summary report on demand.
+
+    Query params:
+        start_day (int): Starting day number (default 1)
+        end_day   (int): Ending day number   (default 7)
+    """
+    from src.on_demand_report import ReportGenerator
+
+    start_day = int(request.args.get("start_day", 1))
+    end_day = int(request.args.get("end_day", 7))
+    report = ReportGenerator.generate_weekly_report_on_demand(start_day, end_day, flat_id)
+    if report is None:
+        return jsonify({"error": f"No reports found for {flat_id} in days {start_day}-{end_day}"}), 404
+    return jsonify(report)
+
+
+@app.route("/api/reports/<flat_id>/pdf/daily/<int:day>", methods=["GET"])
+def download_daily_pdf(flat_id, day):
+    """Download a daily report as a professionally formatted PDF."""
+    from src.on_demand_report import ReportGenerator
+    from src.pdf_generator import PDFReportGenerator
+    from flask import Response
+
+    report = ReportGenerator.generate_daily_report_on_demand(day, flat_id)
+    
+    # If no saved report is found, check if it's the current ongoing day to generate a live report!
+    if report is None and day == session_state.get("simulated_day_number"):
+        readings = []
+        if flat_id in SIMULATED_FLATS:
+            readings = session_state.get("flat_history", {}).get(flat_id, [])
+        elif flat_id in REAL_DATA_FLATS:
+            # For real flats we could fetch from RTDB, but we'll use whatever history is loaded
+            readings = session_state.get("flat_history", {}).get(flat_id, [])
+            
+        if not readings:
+            # If no history at all, provide a dummy reading so they still get a PDF
+            readings = [{
+                "water_used_ml": 0,
+                "flow_rate_ml_min": 0,
+                "timestamp": datetime.now().isoformat()
+            }]
+            
+        # Map history keys to expected format for compile_report
+        mapped_readings = []
+        for r in readings:
+            mapped_readings.append({
+                "water_used_ml": r.get("usage", r.get("water_used_ml", 0)),
+                "flow_rate_ml_min": r.get("flow_rate", r.get("flow_rate_ml_min", 0)),
+                "water_left_ml": r.get("water_left_ml", 0),
+                "timestamp": r.get("timestamp", datetime.now().isoformat())
+            })
+            
+        live_report = Analytics.compile_report(mapped_readings)
+        report = {
+            "id": live_report.report_timestamp.isoformat(),
+            "flat_id": flat_id,
+            "day": day,
+            "total_usage_ml": float(live_report.total_usage_ml),
+            "min_water_left_ml": float(live_report.min_water_left_ml),
+            "average_flow_ml_min": float(live_report.average_flow_ml_min),
+            "peak_flow_ml_min": float(live_report.peak_flow_ml_min),
+            "peak_usage_timestamp": live_report.peak_usage_timestamp.isoformat(),
+            "suggested_reduction": str(live_report.suggested_reduction),
+            "report_timestamp": live_report.report_timestamp.isoformat(),
+        }
+
+    if report is None:
+        return jsonify({"error": f"No report found for {flat_id} day {day}. Wait for the day to finish or click Reset Day in Admin."}), 404
+
+    pdf_bytes = PDFReportGenerator.generate_daily_report_pdf(report, flat_id)
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename={flat_id}_daily_day_{day}.pdf"
+        },
+    )
+
+
+@app.route("/api/reports/<flat_id>/pdf/weekly", methods=["GET"])
+def download_weekly_pdf(flat_id):
+    """Download a weekly summary as a professionally formatted PDF."""
+    from src.on_demand_report import ReportGenerator
+    from src.pdf_generator import PDFReportGenerator
+    from flask import Response
+
+    start_day = int(request.args.get("start_day", 1))
+    end_day = int(request.args.get("end_day", 7))
+    reports = ReportGenerator.get_reports_by_day_range(start_day, end_day, flat_id)
+    
+    current_day = session_state.get("simulated_day_number")
+    if start_day <= current_day <= end_day:
+        # Check if we already have the current day in saved reports (unlikely if not reset)
+        if not any(r.get("day") == current_day for r in reports):
+            readings = session_state.get("flat_history", {}).get(flat_id, [])
+            if not readings:
+                readings = [{"water_used_ml": 0, "flow_rate_ml_min": 0, "timestamp": datetime.now().isoformat()}]
+            
+            mapped_readings = []
+            for r in readings:
+                mapped_readings.append({
+                    "water_used_ml": r.get("usage", r.get("water_used_ml", 0)),
+                    "flow_rate_ml_min": r.get("flow_rate", r.get("flow_rate_ml_min", 0)),
+                    "water_left_ml": r.get("water_left_ml", 0),
+                    "timestamp": r.get("timestamp", datetime.now().isoformat())
+                })
+                
+            live_report = Analytics.compile_report(mapped_readings)
+            reports.append({
+                "id": live_report.report_timestamp.isoformat(),
+                "flat_id": flat_id, "day": current_day,
+                "total_usage_ml": float(live_report.total_usage_ml),
+                "min_water_left_ml": float(live_report.min_water_left_ml),
+                "average_flow_ml_min": float(live_report.average_flow_ml_min),
+                "peak_flow_ml_min": float(live_report.peak_flow_ml_min),
+                "peak_usage_timestamp": live_report.peak_usage_timestamp.isoformat(),
+                "suggested_reduction": str(live_report.suggested_reduction),
+                "report_timestamp": live_report.report_timestamp.isoformat(),
+            })
+
+    if not reports:
+        return jsonify({"error": f"No reports found for {flat_id} in days {start_day}-{end_day}"}), 404
+
+    pdf_bytes = PDFReportGenerator.generate_weekly_report_pdf(reports, flat_id)
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename={flat_id}_weekly_days_{start_day}-{end_day}.pdf"
+        },
+    )
+
+@app.route("/api/reports/<flat_id>/pdf/monthly", methods=["GET"])
+def download_monthly_pdf(flat_id):
+    """Download a monthly summary as a professionally formatted PDF."""
+    from src.on_demand_report import ReportGenerator
+    from src.pdf_generator import PDFReportGenerator
+    from flask import Response
+
+    start_day = int(request.args.get("start_day", 1))
+    end_day = int(request.args.get("end_day", 30))
+    reports = ReportGenerator.get_reports_by_day_range(start_day, end_day, flat_id)
+    
+    current_day = session_state.get("simulated_day_number")
+    if start_day <= current_day <= end_day:
+        if not any(r.get("day") == current_day for r in reports):
+            readings = session_state.get("flat_history", {}).get(flat_id, [])
+            if not readings:
+                readings = [{"water_used_ml": 0, "flow_rate_ml_min": 0, "timestamp": datetime.now().isoformat()}]
+            
+            mapped_readings = []
+            for r in readings:
+                mapped_readings.append({
+                    "water_used_ml": r.get("usage", r.get("water_used_ml", 0)),
+                    "flow_rate_ml_min": r.get("flow_rate", r.get("flow_rate_ml_min", 0)),
+                    "water_left_ml": r.get("water_left_ml", 0),
+                    "timestamp": r.get("timestamp", datetime.now().isoformat())
+                })
+                
+            live_report = Analytics.compile_report(mapped_readings)
+            reports.append({
+                "id": live_report.report_timestamp.isoformat(),
+                "flat_id": flat_id, "day": current_day,
+                "total_usage_ml": float(live_report.total_usage_ml),
+                "min_water_left_ml": float(live_report.min_water_left_ml),
+                "average_flow_ml_min": float(live_report.average_flow_ml_min),
+                "peak_flow_ml_min": float(live_report.peak_flow_ml_min),
+                "peak_usage_timestamp": live_report.peak_usage_timestamp.isoformat(),
+                "suggested_reduction": str(live_report.suggested_reduction),
+                "report_timestamp": live_report.report_timestamp.isoformat(),
+            })
+
+    if not reports:
+        return jsonify({"error": f"No reports found for {flat_id} in days {start_day}-{end_day}"}), 404
+
+    # Reuse weekly PDF generator since it handles lists of reports cleanly
+    pdf_bytes = PDFReportGenerator.generate_weekly_report_pdf(reports, flat_id)
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename={flat_id}_monthly_days_{start_day}-{end_day}.pdf"
+        },
     )
 
 

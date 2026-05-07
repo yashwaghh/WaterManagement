@@ -216,6 +216,90 @@ class MultiFlatRanking:
         return ranking_records
 
     @staticmethod
+    def rank_flats_per_threshold(
+        daily_reports: Dict[str, Any],
+        flat_thresholds: Dict[str, float],
+        simulated_day: int = 1,
+        weekly_points: Optional[Dict[str, int]] = None,
+        finalize_points: bool = False,
+    ) -> List[RankingRecord]:
+        """Rank flats using per-flat thresholds (based on family size).
+
+        Like rank_flats() but each flat has its own threshold_ml value
+        calculated from family_size × PER_PERSON_ML.
+        """
+        if not daily_reports:
+            return []
+
+        if weekly_points is None:
+            weekly_points = {}
+
+        flat_metrics = []
+        for flat_id, report in daily_reports.items():
+            total_usage = getattr(report, 'total_usage_ml', 0)
+            avg_flow = getattr(report, 'average_flow_ml_min', 0)
+            peak_flow = getattr(report, 'peak_flow_ml_min', 0)
+            threshold_ml = flat_thresholds.get(flat_id, 2000)
+
+            usage_ratio = total_usage / threshold_ml if threshold_ml > 0 else 0
+            efficiency_score = MultiFlatRanking.calculate_efficiency_score(usage_ratio)
+            status = Ranking.classify_usage(total_usage, threshold_ml)
+
+            flat_metrics.append({
+                'unique_id': flat_id,
+                'total_usage_ml': total_usage,
+                'threshold_ml': threshold_ml,
+                'usage_ratio': round(usage_ratio, 2),
+                'average_flow_rate_ml_min': avg_flow,
+                'peak_flow_rate_ml_min': peak_flow,
+                'efficiency_score': efficiency_score,
+                'status': status,
+                'weekly_points_current': weekly_points.get(flat_id, 0),
+            })
+
+        sorted_flats = sorted(
+            flat_metrics,
+            key=lambda x: (
+                -x['efficiency_score'],
+                x['total_usage_ml'],
+                x['peak_flow_rate_ml_min'],
+                x['unique_id'],
+            ),
+        )
+
+        total_flats = len(sorted_flats)
+        ranking_records = []
+
+        for rank_idx, flat_data in enumerate(sorted_flats, start=1):
+            daily_points = MultiFlatRanking.calculate_daily_points(
+                rank_idx, total_flats, flat_data['status']
+            )
+            reward_or_penalty = MultiFlatRanking.classify_reward_or_penalty(daily_points)
+
+            weekly_total = flat_data['weekly_points_current']
+            if finalize_points and daily_points != 0:
+                weekly_total += daily_points
+
+            record = RankingRecord(
+                simulated_day=simulated_day,
+                unique_id=flat_data['unique_id'],
+                total_usage_ml=flat_data['total_usage_ml'],
+                threshold_ml=flat_data['threshold_ml'],
+                usage_ratio=flat_data['usage_ratio'],
+                average_flow_rate_ml_min=flat_data['average_flow_rate_ml_min'],
+                peak_flow_rate_ml_min=flat_data['peak_flow_rate_ml_min'],
+                efficiency_score=flat_data['efficiency_score'],
+                status=flat_data['status'],
+                rank=rank_idx,
+                daily_points=daily_points,
+                reward_or_penalty=reward_or_penalty,
+                weekly_points=weekly_total,
+            )
+            ranking_records.append(record)
+
+        return ranking_records
+
+    @staticmethod
     def update_weekly_points(
         weekly_points: Dict[str, int],
         ranking_records: List[RankingRecord],

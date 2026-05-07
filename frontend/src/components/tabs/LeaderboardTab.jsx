@@ -138,16 +138,6 @@ export default function LeaderboardTab() {
 
   return (
     <div className="space-y-8 animate-fade-in pb-12">
-      {/* Leak alert banner */}
-      {alertedFlats.size > 0 && (
-        <div className="flex items-center gap-3 rounded-xl bg-red-50 border border-red-300 px-6 py-4 shadow-sm text-red-900 animate-pulse">
-          <AlertTriangle size={24} className="shrink-0 text-red-600" />
-          <span className="font-bold text-lg">CRITICAL: Leak Detected</span>
-          <span className="text-md font-medium">
-            Flats: {[...alertedFlats].join(', ')} — Continuous maximum flow detected. Immediate action required.
-          </span>
-        </div>
-      )}
 
       {/* Header */}
       <div className="flex justify-between items-center border-b pb-4">
@@ -285,11 +275,7 @@ export default function LeaderboardTab() {
                           <span className={`font-extrabold text-lg ${isMe ? 'text-indigo-700' : 'text-gray-900'}`}>
                             {entry.flat_id} {isMe && '(You)'}
                           </span>
-                          {alertedFlats.has(entry.flat_id) && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700 animate-pulse">
-                              <AlertTriangle size={12} /> Leak
-                            </span>
-                          )}
+
                         </div>
                         <div className="mt-1">
                           <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-xs font-bold border ${tier.badge}`}>

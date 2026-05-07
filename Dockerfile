@@ -30,6 +30,8 @@ RUN pip install --no-cache-dir -r requirements-api.txt gunicorn
 COPY api.py .
 COPY simulator.py .
 COPY src/ ./src/
+COPY .env .
+COPY service_account.json .
 
 # Copy React build from Stage 1 into the Flask API static folder
 COPY --from=frontend-builder /app/frontend/build ./frontend/build

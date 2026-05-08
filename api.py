@@ -97,6 +97,7 @@ session_state = {
     "consecutive_flow_ticks": {},
     # In-memory history ring-buffer for simulated flats
     "flat_history": {},
+    "peak_flows": {},
 }
 
 
@@ -263,10 +264,25 @@ def get_leaderboard():
     # Convert readings to reports for ranking
     daily_reports = {}
     for flat_id, reading in readings_by_flat.items():
+        current_flow = reading["flow_rate_ml_min"]
+
+        stored_peak = session_state["peak_flows"].get(flat_id, 0)
+
+        # Reset peak if sensor truly idle
+        if (
+            reading["water_used_ml"] == 0
+            and current_flow == 0
+        ):
+            stored_peak = 0
+
+        new_peak = max(stored_peak, current_flow)
+
+        session_state["peak_flows"][flat_id] = new_peak
+
         daily_reports[flat_id] = SimpleReport(
             total_usage_ml=reading["water_used_ml"],
-            average_flow_ml_min=reading["flow_rate_ml_min"],
-            peak_flow_ml_min=reading["flow_rate_ml_min"],
+            average_flow_ml_min=current_flow,
+            peak_flow_ml_min=new_peak,
         )
 
     # Rank flats with per-flat thresholds
